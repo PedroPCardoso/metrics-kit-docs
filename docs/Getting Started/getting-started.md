@@ -5,6 +5,11 @@ excerpt: >-
   NestJS integration.
 hidden: false
 ---
+> Generate **metrics** (aggregated values) and **trends** (time-series ready for
+> charts) from TypeORM entities, with a fluent API and NestJS integration.
+
+---
+
 ## Table of Contents
 
 - [Installation](#installation)
@@ -15,7 +20,7 @@ hidden: false
 - [Periods](#periods)
 - [Window Semantics](#window-semantics)
 - [Date Ranges (between / from)](#date-ranges-between--from)
-- [Range Granularity (groupBy\*)](#range-granularity-groupby)
+- [Range Granularity (groupBy*)](#range-granularity-groupby)
 - [Temporal Reference (forDay / forWeek / forMonth / forYear)](#temporal-reference-forday--forweek--formonth--foryear)
 - [Combined Shorthands](#combined-shorthands)
 - [Custom Date Column (dateColumn)](#custom-date-column-datecolumn)
@@ -24,6 +29,8 @@ hidden: false
   - [.metrics()](#metrics)
   - [.trends()](#trends)
   - [.metricsWithVariations()](#metricswithvariations)
+  - [.trendsWithComparison()](#trendswithcomparison)
+- [Cumulative Trends (cumulative)](#cumulative-trends-cumulative)
 - [Fill Missing Data (fillMissingData)](#fill-missing-data-fillmissingdata)
 - [Multiple Series (groupData)](#multiple-series-groupdata)
 - [Percentages (inPercent)](#percentages-inpercent)
@@ -35,10 +42,12 @@ hidden: false
 - [Validation / SkipValidation](#validation--skipvalidation)
 - [Error Hierarchy](#error-hierarchy)
 - [Repository Helpers (metricsFor / withMetrics)](#repository-helpers-metricsfor--withmetrics)
+- [SQL Introspection (toSql / toTrendsSql)](#sql-introspection-tosql--totrendssql)
+- [Chart Helpers](#chart-helpers)
 - [Error Reference Table](#error-reference-table)
 - [Complete Example](#complete-example)
 
-***
+---
 
 ## Installation
 
@@ -52,7 +61,7 @@ Peer dependencies (must already be in your project):
 - `typeorm` ^0.3
 - `nestjs-metrics-core` (installed automatically)
 
-***
+---
 
 ## Module Registration
 
@@ -97,11 +106,10 @@ interface MetricsModuleOptions {
 }
 ```
 
-<Callout icon="⚠️" theme="warn">
-  The schema is validated with Zod. Invalid locales (e.g. `''`) throw `ValidationError`.
-</Callout>
+> ⚠️ The schema is validated with Zod. Invalid locales (e.g. `''`) throw
+> `ValidationError`.
 
-***
+---
 
 ## The MetricsService
 
@@ -141,7 +149,7 @@ this.metrics
   .trends();
 ```
 
-***
+---
 
 ## Entry Points
 
@@ -208,21 +216,25 @@ const result = await MetricsBuilder
   .trends();
 ```
 
-***
+---
 
 ## Aggregators
 
-| Method       | SQL      | Description                  | Default `column` |
-| ------------ | -------- | ---------------------------- | ---------------- |
-| `.count()`   | `COUNT`  | Number of rows               | `'id'`           |
-| `.sum()`     | `SUM`    | Sum of a numeric column      | (required)       |
-| `.average()` | `AVG`    | Average of a numeric column  | (required)       |
-| `.max()`     | `MAX`    | Largest value in the column  | (required)       |
-| `.min()`     | `MIN`    | Smallest value in the column | (required)       |
+| Method              | SQL              | Description                         | Default `column` |
+|--------------------|------------------|-------------------------------------|------------------|
+| `.count()`         | `COUNT`          | Number of rows                      | `'id'`           |
+| `.countDistinct()` | `COUNT DISTINCT` | Distinct values in a column         | `'id'`           |
+| `.sum()`           | `SUM`            | Sum of a numeric column             | (required)       |
+| `.average()`       | `AVG`            | Average of a numeric column         | (required)       |
+| `.max()`           | `MAX`            | Largest value in the column         | (required)       |
+| `.min()`           | `MIN`            | Smallest value in the column        | (required)       |
 
 ```typescript
 // Simple count (default column 'id')
 await Metrics.query(qb).count().metrics();
+
+// Distinct count
+await Metrics.query(qb).countDistinct('customer_id').metrics();
 
 // Sum of a specific column
 await Metrics.query(qb).sum('amount').metrics();
@@ -238,19 +250,20 @@ await Metrics.query(qb).min('amount').metrics();
 > The `column` parameter is validated as a safe SQL identifier. Special characters
 > or SQL injection attempts throw `InvalidIdentifierException`.
 
-***
+---
 
 ## Periods
 
 Define how data is grouped over time. Used with `.trends()` or with `.metrics()`
 (for temporal scoping without grouping).
 
-| Method             | Bucket   | Labels (trends)      |
-| ------------------ | -------- | -------------------- |
-| `.byDay(count?)`   | Day      | Day of the week name |
-| `.byWeek(count?)`  | ISO Week | `Week N`             |
-| `.byMonth(count?)` | Month    | Month name           |
-| `.byYear(count?)`  | Year     | Year number          |
+| Method                    | Bucket     | Labels (trends)        |
+|--------------------------|------------|------------------------|
+| `.byHour(count?)`        | Hour       | `HH:00` (24-hour)      |
+| `.byDay(count?)`         | Day        | Day of the week name   |
+| `.byWeek(count?)`        | ISO Week   | `Week N`               |
+| `.byMonth(count?)`       | Month      | Month name             |
+| `.byYear(count?)`        | Year       | Year number            |
 
 ```typescript
 // Group by month
@@ -260,17 +273,17 @@ await Metrics.query(qb).count().byMonth().trends();
 
 > See "Window Semantics" below for the meaning of the `count` parameter.
 
-***
+---
 
 ## Window Semantics
 
 The `count` parameter in period methods controls the time window:
 
-| `count` | Behavior                                                   |
-| ------- | ---------------------------------------------------------- |
-| `0`     | **Entire** period (e.g. the whole year, no window filter)  |
-| `1`     | **Only** the current unit (e.g. this month)                |
-| `>1`    | **Last N units** up to the reference (e.g. last 3 months)  |
+| `count` | Behavior                                                        |
+|---------|-----------------------------------------------------------------|
+| `0`     | **Entire** period (e.g. the whole year, no window filter)       |
+| `1`     | **Only** the current unit (e.g. this month)                     |
+| `>1`    | **Last N units** up to the reference (e.g. last 3 months)       |
 
 ```typescript
 // Whole year (default)
@@ -295,7 +308,7 @@ await m().count().byYear(1).forYear(2024).metrics();
 await m().count().byYear(3).forYear(2024).metrics();
 ```
 
-***
+---
 
 ## Date Ranges (between / from)
 
@@ -337,9 +350,9 @@ await Metrics.query(qb).count().from('2026-06-01').metrics();
 .minFrom('2020-01-01', 'amount')
 ```
 
-***
+---
 
-## Range Granularity (groupBy\*)
+## Range Granularity (groupBy*)
 
 When using `.between()`/`.from()`, the default bucket is **day**. Use `groupBy*`
 to change it:
@@ -358,9 +371,13 @@ await m().count().between('2026-03-01', '2026-03-15').groupByWeek().trends();
 
 // By day (explicit, equivalent to the default)
 await m().count().between('2026-01-01', '2026-01-31').groupByDay().trends();
+
+// By hour
+await m().count().between('2026-01-15 00:00', '2026-01-15 23:59').groupByHour().trends();
+// → { labels: ['00:00', '01:00', ...], data: [...] }
 ```
 
-***
+---
 
 ## Temporal Reference (forDay / forWeek / forMonth / forYear)
 
@@ -391,43 +408,49 @@ await Metrics.query(qb)
   .count().byMonth()
   .forYear(2026)
   .trends();
+
+// Specific hour (0-23)
+await Metrics.query(qb)
+  .count().byHour(1)
+  .forYear(2026).forMonth(6).forDay(15).forHour(14)
+  .metrics();
 ```
 
-***
+---
 
 ## Combined Shorthands
 
 Shortcuts combining aggregator + period in a single call:
 
-| Shorthand                 | Equivalent                 |
-| ------------------------- | -------------------------- |
-| `.countByDay(col, n)`     | `.count(col).byDay(n)`     |
-| `.countByWeek(col, n)`    | `.count(col).byWeek(n)`    |
-| `.countByMonth(col, n)`   | `.count(col).byMonth(n)`   |
-| `.countByYear(col, n)`    | `.count(col).byYear(n)`    |
-| `.sumByDay(col, n)`       | `.sum(col).byDay(n)`       |
-| `.sumByWeek(col, n)`      | `.sum(col).byWeek(n)`      |
-| `.sumByMonth(col, n)`     | `.sum(col).byMonth(n)`     |
-| `.sumByYear(col, n)`      | `.sum(col).byYear(n)`      |
-| `.averageByDay(col, n)`   | `.average(col).byDay(n)`   |
-| `.averageByWeek(col, n)`  | `.average(col).byWeek(n)`  |
-| `.averageByMonth(col, n)` | `.average(col).byMonth(n)` |
-| `.averageByYear(col, n)`  | `.average(col).byYear(n)`  |
-| `.maxByDay(col, n)`       | `.max(col).byDay(n)`       |
-| `.maxByWeek(col, n)`      | `.max(col).byWeek(n)`      |
-| `.maxByMonth(col, n)`     | `.max(col).byMonth(n)`     |
-| `.maxByYear(col, n)`      | `.max(col).byYear(n)`      |
-| `.minByDay(col, n)`       | `.min(col).byDay(n)`       |
-| `.minByWeek(col, n)`      | `.min(col).byWeek(n)`      |
-| `.minByMonth(col, n)`     | `.min(col).byMonth(n)`     |
-| `.minByYear(col, n)`      | `.min(col).byYear(n)`      |
+| Shorthand                | Equivalent                         |
+|--------------------------|------------------------------------|
+| `.countByDay(col, n)`    | `.count(col).byDay(n)`             |
+| `.countByWeek(col, n)`   | `.count(col).byWeek(n)`            |
+| `.countByMonth(col, n)`  | `.count(col).byMonth(n)`           |
+| `.countByYear(col, n)`   | `.count(col).byYear(n)`            |
+| `.sumByDay(col, n)`      | `.sum(col).byDay(n)`               |
+| `.sumByWeek(col, n)`     | `.sum(col).byWeek(n)`              |
+| `.sumByMonth(col, n)`    | `.sum(col).byMonth(n)`             |
+| `.sumByYear(col, n)`     | `.sum(col).byYear(n)`              |
+| `.averageByDay(col, n)`  | `.average(col).byDay(n)`           |
+| `.averageByWeek(col, n)` | `.average(col).byWeek(n)`          |
+| `.averageByMonth(col, n)`| `.average(col).byMonth(n)`         |
+| `.averageByYear(col, n)` | `.average(col).byYear(n)`          |
+| `.maxByDay(col, n)`      | `.max(col).byDay(n)`               |
+| `.maxByWeek(col, n)`     | `.max(col).byWeek(n)`              |
+| `.maxByMonth(col, n)`    | `.max(col).byMonth(n)`             |
+| `.maxByYear(col, n)`     | `.max(col).byYear(n)`              |
+| `.minByDay(col, n)`      | `.min(col).byDay(n)`               |
+| `.minByWeek(col, n)`     | `.min(col).byWeek(n)`              |
+| `.minByMonth(col, n)`    | `.min(col).byMonth(n)`             |
+| `.minByYear(col, n)`     | `.min(col).byYear(n)`              |
 
 ```typescript
 await Metrics.query(qb).countByMonth('id', 6).forYear(2026).trends();
 await Metrics.query(qb).sumByYear('amount', 5).trends();
 ```
 
-***
+---
 
 ## Custom Date Column (dateColumn)
 
@@ -443,7 +466,7 @@ await Metrics.query(qb)
 // → Groups by updated_at instead of created_at
 ```
 
-***
+---
 
 ## Categorical Grouping (labelColumn)
 
@@ -487,7 +510,7 @@ await Metrics.query(ordersJoinCustomers(dataSource))
 // → { labels: ['Acme', 'Globex'], data: [2, 1] }
 ```
 
-***
+---
 
 ## Terminal Methods
 
@@ -550,7 +573,69 @@ const r = await Metrics.query(qb)
 > `previousCount` must be > 0. `previousPeriod` must be one of:
 > `Period.DAY | Period.WEEK | Period.MONTH | Period.YEAR`.
 
-***
+### `.trendsWithComparison()`
+
+Returns two aligned series — the current period and a comparison period shifted back —
+ready for side-by-side chart overlays.
+
+```typescript
+interface TrendsComparisonResult {
+  labels: (string | number)[];
+  current: number[];
+  previous: number[];
+}
+```
+
+```typescript
+import { Period } from 'nestjs-metrics';
+
+// Current year vs previous year, month by month
+const r = await Metrics.query(qb)
+  .countByMonth()
+  .forYear(2026)
+  .trendsWithComparison(1, Period.YEAR);
+// → { labels: ['January', ...], current: [10, ...], previous: [7, ...] }
+
+// As percentage of each series total
+const r = await Metrics.query(qb)
+  .sumByMonth('amount')
+  .forYear(2026)
+  .trendsWithComparison(1, Period.YEAR, true);
+// → { labels: [...], current: [45, ...], previous: [38, ...] }
+```
+
+> `previousCount` must be > 0. `previousPeriod` must be one of:
+> `Period.DAY | Period.WEEK | Period.MONTH | Period.YEAR | Period.HOUR`.
+
+---
+
+## Cumulative Trends (cumulative)
+
+`cumulative()` transforms a `.trends()` series into a **running total** — each bucket
+becomes the sum of all values up to that point.
+
+```typescript
+await Metrics.query(qb)
+  .countByMonth()
+  .forYear(2026)
+  .cumulative()
+  .trends();
+// → { labels: ['January', 'February', 'March'], data: [10, 25, 32] }
+//   (10, 10+15, 10+15+7)
+```
+
+Compatible with `fillMissingData` and `groupData`:
+
+```typescript
+await Metrics.query(qb)
+  .sumByMonth('amount')
+  .forYear(2026)
+  .fillMissingData()
+  .cumulative()
+  .trends();
+```
+
+---
 
 ## Fill Missing Data (fillMissingData)
 
@@ -567,11 +652,11 @@ await Metrics.query(qb)
 
 ### Behavior by mode
 
-| Mode                     | Strategy                                                  |
-| ------------------------ | --------------------------------------------------------- |
-| Period (byMonth etc.)    | Fills between the **smallest and largest** bucket present |
-| Range (between/from)     | Enumerates the **entire** range                           |
-| Categorical (labelColumn)| Auto-discovers **distinct** labels or uses explicit list  |
+| Mode                    | Strategy                                                    |
+|-------------------------|-------------------------------------------------------------|
+| Period (byMonth etc.)   | Fills between the **smallest and largest** bucket present   |
+| Range (between/from)    | Enumerates the **entire** range                             |
+| Categorical (labelColumn)| Auto-discovers **distinct** labels or uses an explicit list|
 
 ### Custom fill value
 
@@ -591,7 +676,7 @@ await Metrics.query(qb)
 // → { labels: ['pending', 'delivered', 'cancelled'], data: [2, 1, 0] }
 ```
 
-***
+---
 
 ## Multiple Series (groupData)
 
@@ -625,13 +710,27 @@ await Metrics.query(qb)
 // labels: ['January', 'February', 'March']
 ```
 
+### Auto-discover labels
+
+When `labels` is omitted (or an empty array), the builder queries the database for
+all distinct values in the column and uses them as series names automatically.
+
+```typescript
+await Metrics.query(qb)
+  .countByMonth('status')
+  .groupData()            // ← no labels — auto-discovered at query time
+  .forYear(2026)
+  .trends();
+// → data keys match whatever distinct statuses exist in the table
+```
+
 ### Custom aggregator
 
 ```typescript
 .groupData(['pending', 'delivered'], Aggregate.SUM)
 ```
 
-***
+---
 
 ## Percentages (inPercent)
 
@@ -651,7 +750,7 @@ await m().count().byMonth().forYear(2026).fillMissingData().trends(true);
 // → { labels: ['January', 'February', 'March'], data: [75, 0, 25] }
 ```
 
-***
+---
 
 ## Timezone
 
@@ -692,11 +791,10 @@ const r = await Metrics.query(qb, { timezone: 'America/New_York' })
 // → labels: ['2026-07-14'], data: [1]
 ```
 
-<Callout icon="⚠️" theme="warn">
-  **SQLite** does not support timezone in executor mode. Throws `SqliteTimezoneUnsupportedException`.
-</Callout>
+> ⚠️ **SQLite** does not support timezone in executor mode. Throws
+> `SqliteTimezoneUnsupportedException`.
 
-***
+---
 
 ## Locale / Label Translation
 
@@ -716,7 +814,7 @@ Metrics.query(qb, { locale: 'fr' })
 
 Default value: `'en'`.
 
-***
+---
 
 ## Cache
 
@@ -738,31 +836,72 @@ const result = await Metrics.query(qb, opts, cache)
 
 ### Custom CacheStore
 
-Implement the `CacheStore` interface:
+Implement the `CacheStore` interface — all methods can be **sync or async**:
 
 ```typescript
 import type { CacheStore } from 'nestjs-metrics-core';
 
 class MyRedisStore implements CacheStore {
-  get<T>(key: string): T | undefined { /* ... */ }
-  set<T>(key: string, value: T, ttl: number): void { /* ... */ }
-  del(key: string): void { /* ... */ }
-  clear(): void { /* ... */ }
-  stats(): CacheStats { /* ... */ }
+  async get<T>(key: string): Promise<T | undefined> { /* ... */ }
+  async set<T>(key: string, value: T, ttl: number): Promise<void> { /* ... */ }
+  async del(key: string): Promise<void> { /* ... */ }
+  async clear(): Promise<void> { /* ... */ }
+  async stats(): Promise<CacheStats> { /* ... */ }
 }
+```
+
+### cache-manager bridge
+
+Use `createCacheManagerStore()` to wrap any `cache-manager` v5+ store:
+
+```typescript
+import { createCacheManagerStore } from 'nestjs-metrics';
+import { createCache } from 'cache-manager';
+import { redisStore } from 'cache-manager-ioredis-yet';
+
+const cacheManager = await createCache({ store: await redisStore({ host: 'localhost' }) });
+const cache = createCacheManagerStore(cacheManager);
+
+const result = await Metrics.query(qb, { cache: { enabled: true, ttl: 60 } }, cache)
+  .countByMonth()
+  .trends();
 ```
 
 ### CacheStore methods
 
-| Method                 | Description                                  |
-| ---------------------- | -------------------------------------------- |
-| `get(key)`             | Returns value or `undefined` if not found    |
-| `set(key, value, ttl)` | Stores with TTL in seconds                   |
-| `del(key)`             | Removes entry                                |
-| `clear()`              | Clears everything and resets statistics      |
-| `stats()`              | Returns `{ hits, misses, size }`             |
+| Method                   | Description                                          |
+|--------------------------|------------------------------------------------------|
+| `get(key)`               | Returns value or `undefined` if not found (sync/async) |
+| `set(key, value, ttl)`   | Stores with TTL in seconds (sync/async)              |
+| `del(key)`               | Removes entry (sync/async)                           |
+| `clear()`                | Clears everything and resets statistics (sync/async) |
+| `stats()`                | Returns `{ hits, misses, size }` (sync/async)        |
 
-***
+### Observability — cache logger
+
+Pass a `logger` callback in `cache` options to receive events on every cache
+hit, miss, set, or delete:
+
+```typescript
+import type { CacheEvent } from 'nestjs-metrics-core';
+
+const opts = {
+  cache: {
+    enabled: true,
+    ttl: 60,
+    logger: ({ type, key }: CacheEvent) => console.log(`cache:${type} ${key}`),
+  },
+};
+
+await Metrics.query(qb, opts, cache).countByMonth().trends();
+// → cache:miss metrics:...
+// → cache:set  metrics:...
+// → cache:hit  metrics:...  (subsequent calls)
+```
+
+Event types: `'hit' | 'miss' | 'set' | 'delete'`.
+
+---
 
 ## Executor Mode (queryExecutor)
 
@@ -773,7 +912,7 @@ Used **without TypeORM** — with Prisma, Drizzle, or any SQL driver. Requires a
 
 ```typescript
 interface DataSource {
-  dialect: 'postgres' | 'mysql' | 'sqlite';
+  dialect: 'postgres' | 'mysql' | 'sqlite' | 'mssql';
   execute: (sql: string, params: unknown[]) => Promise<Row[]>;
 }
 ```
@@ -807,7 +946,7 @@ interface ExecutorSpec {
 }
 ```
 
-***
+---
 
 ## Structured Filters (WhereInput)
 
@@ -869,7 +1008,7 @@ const result = await MetricsBuilder
 
 The `where` filters are applied **along with** period/range filters.
 
-***
+---
 
 ## Validation / SkipValidation
 
@@ -895,7 +1034,7 @@ Metrics.skipValidation = true; // disables Zod validation on all inputs
 Metrics.skipValidation = false; // re-enables
 ```
 
-***
+---
 
 ## Error Hierarchy
 
@@ -931,7 +1070,7 @@ try {
 }
 ```
 
-***
+---
 
 ## Repository Helpers (metricsFor / withMetrics)
 
@@ -960,24 +1099,103 @@ const result = await repo
   .trends();
 ```
 
-***
+---
+
+## SQL Introspection (toSql / toTrendsSql)
+
+`toSql()` and `toTrendsSql()` render the SQL that would be executed — useful for
+debugging, logging, or building query-plan tests.
+
+```typescript
+const sql = Metrics.query(qb)
+  .sumByMonth('amount')
+  .forYear(2026)
+  .toSql();
+// → SELECT SUM("amount") AS value FROM ... WHERE ...
+
+const trendsSql = Metrics.query(qb)
+  .sumByMonth('amount')
+  .forYear(2026)
+  .toTrendsSql();
+```
+
+### Masking values
+
+Pass `{ mask: true }` to redact bound parameter values (safe for production logs):
+
+```typescript
+const sql = builder.toSql({ mask: true });
+// → ... WHERE created_at >= '[REDACTED]' AND created_at < '[REDACTED]'
+```
+
+---
+
+## Chart Helpers
+
+Convert any `TrendsResult`, `GroupedTrendsResult`, or `TrendsComparisonResult` into
+the format expected by popular chart libraries.
+
+```typescript
+import { toChartJs, toApexCharts, toRecharts } from 'nestjs-metrics';
+// or: from 'nestjs-metrics-core'
+```
+
+### `toChartJs(result, options?)`
+
+```typescript
+const trends = await Metrics.query(qb).countByMonth().forYear(2026).trends();
+const config = toChartJs(trends, { label: 'Orders', type: 'line' });
+// → { type: 'line', data: { labels: [...], datasets: [{ label: 'Orders', data: [...] }] } }
+```
+
+| Option         | Type      | Default   | Description                              |
+|----------------|-----------|-----------|------------------------------------------|
+| `label`        | `string`  | `'value'` | Dataset label                            |
+| `type`         | `string`  | `'line'`  | Chart.js chart type                      |
+| `includeTotal` | `boolean` | `false`   | Include the total series in grouped results |
+
+### `toApexCharts(result, options?)`
+
+```typescript
+const config = toApexCharts(trends, { name: 'Orders' });
+// → { series: [{ name: 'Orders', data: [...] }], xaxis: { categories: [...] } }
+```
+
+### `toRecharts(result)`
+
+Returns a flat array of data points:
+
+```typescript
+const data = toRecharts(trends);
+// → [{ label: 'January', value: 10 }, { label: 'February', value: 15 }, ...]
+```
+
+With `GroupedTrendsResult` or `TrendsComparisonResult`, each point carries one key
+per series:
+
+```typescript
+const data = toRecharts(grouped);
+// → [{ label: 'January', total: 10, pending: 6, paid: 4 }, ...]
+```
+
+---
 
 ## Error Reference Table
 
-| Exception                            | Code                          | Cause                                         |
-| ------------------------------------ | ----------------------------- | --------------------------------------------- |
-| `ValidationError`                    | `VALIDATION_ERROR`            | Invalid options (empty locale, etc.)          |
-| `InvalidAggregateException`          | `INVALID_AGGREGATE`           | Unsupported aggregator                        |
-| `InvalidDateFormatException`         | `INVALID_DATE_FORMAT`         | Date is not in YYYY-MM-DD format              |
-| `InvalidIdentifierException`         | `INVALID_IDENTIFIER`          | Unsafe column/table name                      |
-| `InvalidPeriodException`             | `INVALID_PERIOD`              | Invalid period in metricsWithVariations       |
-| `InvalidVariationsCountException`    | `INVALID_VARIATIONS_COUNT`    | previousCount <= 0                            |
-| `InvalidTimezoneException`           | `INVALID_TIMEZONE`            | Invalid IANA zone                             |
-| `SqliteTimezoneUnsupportedException` | `SQLITE_TIMEZONE_UNSUPPORTED` | Non-UTC timezone in SQLite executor           |
-| `ConfigurationError`                 | `CONFIGURATION_ERROR`         | Unsupported driver / dialect not inferred     |
-| `QueryExecutionError`                | `QUERY_EXECUTION_ERROR`       | Driver error during SQL execution             |
+| Exception                            | Code                          | Cause                                             |
+|--------------------------------------|-------------------------------|---------------------------------------------------|
+| `ValidationError`                    | `VALIDATION_ERROR`            | Invalid options (empty locale, etc.)              |
+| `InvalidAggregateException`          | `INVALID_AGGREGATE`           | Unsupported aggregator                            |
+| `InvalidDateFormatException`         | `INVALID_DATE_FORMAT`         | Date is not in YYYY-MM-DD format                  |
+| `InvalidIdentifierException`         | `INVALID_IDENTIFIER`          | Unsafe column/table name                          |
+| `InvalidPeriodException`             | `INVALID_PERIOD`              | Invalid period in metricsWithVariations           |
+| `InvalidVariationsCountException`    | `INVALID_VARIATIONS_COUNT`    | previousCount <= 0                                |
+| `InvalidTimezoneException`           | `INVALID_TIMEZONE`            | Invalid IANA zone                                 |
+| `SqliteTimezoneUnsupportedException` | `SQLITE_TIMEZONE_UNSUPPORTED` | Non-UTC timezone in SQLite executor               |
+| `ConfigurationError`                 | `CONFIGURATION_ERROR`         | Unsupported driver / dialect not inferred         |
+| `QueryExecutionError`                | `QUERY_EXECUTION_ERROR`       | Driver error during SQL execution                 |
 
-***
+---
 
 ## Complete Example
 
@@ -1078,5 +1296,3 @@ export class ReportsModule {
   }
 }
 ```
-
-<br />
